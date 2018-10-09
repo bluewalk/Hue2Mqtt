@@ -125,8 +125,8 @@ namespace Net.Bluewalk.Hue2Mqtt
         {
             return state1.On == state2.On && state1.Alert == state2.Alert &&
                    state1.Brightness == state2.Brightness &&
-                   state1.ColorCoordinates[0] == state2.ColorCoordinates[0] &&
-                   state1.ColorCoordinates[1] == state2.ColorCoordinates[1] &&
+                   //state1.ColorCoordinates[0] == state2.ColorCoordinates[0] &&
+                   //state1.ColorCoordinates[1] == state2.ColorCoordinates[1] &&
                    state1.ColorMode == state2.ColorMode &&
                    state1.ColorTemperature == state2.ColorTemperature &&
                    state1.Effect == state2.Effect && state1.Hue == state2.Hue &&
