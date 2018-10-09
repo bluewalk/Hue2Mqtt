@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<doc>
+  <assembly>
+    <name>Net.Bluewalk.Hue2Mqtt.Service</name>
+  </assembly>
+  <members>
+    <member name="N:Net.Bluewalk.Hue2Mqtt.Service" />
+    <member name="T:Net.Bluewalk.Hue2Mqtt.Service.Service" />
+  </members>
+</doc>
