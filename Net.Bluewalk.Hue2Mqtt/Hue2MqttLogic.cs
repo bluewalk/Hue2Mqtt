@@ -23,6 +23,7 @@ namespace Net.Bluewalk.Hue2Mqtt
 
         private List<Sensor> _hueSensors;
         private List<Light> _hueLights;
+        private List<string> _mqttSubscribedTopics;
 
         public Hue2MqttLogic(string mqttHost, string mqttRootTopic, string hueBridgeAddress, string hueBridgeUsername)
         {
@@ -32,6 +33,7 @@ namespace Net.Bluewalk.Hue2Mqtt
                 if (!_disconnectOnPurpose)
                     _tmrReconnect.Start();
             };
+            _mqttClient.MqttMsgPublishReceived += MqttClientOnMqttMsgPublishReceived;
             _mqttRootTopic = mqttRootTopic;
             _tmrReconnect.Elapsed += (sender, args) => Start();
 
@@ -48,6 +50,21 @@ namespace Net.Bluewalk.Hue2Mqtt
 
             _hueLights = _hueClient.GetLightsAsync().Result?.ToList();
             _hueLights?.ForEach(l => Publish($"light/{l.Id}/state", l.State));
+        }
+
+        public void InitializeMqttSubscriptions()
+        {
+            _mqttSubscribedTopics = new List<string>();
+
+            _hueLights?.ForEach(l =>
+            {
+                var topic = $"{_mqttRootTopic}/light/{l.Id}/state/set";
+#if DEBUG
+                topic = $"dev/{topic}";
+#endif
+                _mqttClient.Subscribe(new[] { topic }, new[] { MqttMsgBase.QOS_LEVEL_EXACTLY_ONCE });
+                _mqttSubscribedTopics.Add(topic);
+            });
         }
 
         private void PollHue(object sender, ElapsedEventArgs e)
@@ -75,6 +92,7 @@ namespace Net.Bluewalk.Hue2Mqtt
             _disconnectOnPurpose = false;
             
             InitializeHue();
+            InitializeMqttSubscriptions();
 
             _tmrPollHue.Start();
         }
@@ -96,12 +114,11 @@ namespace Net.Bluewalk.Hue2Mqtt
         private void Publish(string topic, string message, bool retain = true)
         {
             if (_mqttClient == null || !_mqttClient.IsConnected) return;
-
+            topic = $"{_mqttRootTopic}/{topic}";
 #if DEBUG
             topic = $"dev/{topic}";
 #endif
-            _mqttClient.Publish($"{_mqttRootTopic}/{topic}",
-                Encoding.ASCII.GetBytes(message), MqttMsgBase.QOS_LEVEL_EXACTLY_ONCE, retain);
+            _mqttClient.Publish(topic, Encoding.ASCII.GetBytes(message), MqttMsgBase.QOS_LEVEL_EXACTLY_ONCE, retain);
         }
 
         private bool CompareState(State state1, State state2)
@@ -116,6 +133,42 @@ namespace Net.Bluewalk.Hue2Mqtt
                    state1.Hue == state2.Hue && state1.IsReachable == state2.IsReachable &&
                    state1.Mode == state2.Mode && state1.Saturation == state2.Saturation &&
                    state1.TransitionTime == state2.TransitionTime;
+        }
+        
+        private void MqttClientOnMqttMsgPublishReceived(object sender, MqttMsgPublishEventArgs e)
+        {
+            var topic = e.Topic.ToUpper().Split('/');
+            var message = Encoding.ASCII.GetString(e.Message);
+#if DEBUG
+            // Remove first part "dev"
+            topic = topic.Skip(1).ToArray();
+#endif
+            /**
+             * Topic[0] = _rootTopic
+             * Topic[1] = Type (eg Light)
+             * Topic[2] = Id
+             * Topic[3] = Data (eg State)
+             * Topic[4] = Action (eg Set)
+             */
+
+            switch (topic[4])
+            {
+                case "SET":
+                    switch (topic[1])
+                    {
+                        case "LIGHT":
+                            var state = JsonConvert.DeserializeObject<State>(message);
+                            var command = new LightCommand();
+                            command.FromState(state);
+                            _hueClient.SendCommandAsync(command, new List<string> { topic[2] });
+                            break;
+                        default:
+                            break;
+                    }
+                    break;
+                default:
+                    break;
+            }
         }
     }
 }
