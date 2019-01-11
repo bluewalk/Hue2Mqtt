@@ -3,40 +3,38 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Timers;
+using MQTTnet;
+using MQTTnet.Client;
+using MQTTnet.Extensions.ManagedClient;
 using Newtonsoft.Json;
 using Q42.HueApi;
 using Q42.HueApi.Interfaces;
 using Q42.HueApi.Models;
-using uPLibrary.Networking.M2Mqtt;
-using uPLibrary.Networking.M2Mqtt.Messages;
 
 namespace Net.Bluewalk.Hue2Mqtt
 {
     public class Hue2MqttLogic
     {
-        private readonly MqttClient _mqttClient;
+        private readonly IManagedMqttClient _mqttClient;
+        private readonly string _mqttHost;
+        private readonly int _mqttPort;
         private readonly string _mqttRootTopic;
+
         private readonly ILocalHueClient _hueClient;
-        private bool _disconnectOnPurpose;
-        private readonly Timer _tmrReconnect = new Timer(15000);
         private readonly Timer _tmrPollHue = new Timer(1000);
 
         private List<Sensor> _hueSensors;
         private List<Light> _hueLights;
-        private List<string> _mqttSubscribedTopics;
 
-        public Hue2MqttLogic(string mqttHost, string mqttRootTopic, string hueBridgeAddress, string hueBridgeUsername)
+        public Hue2MqttLogic(string mqttHost, int mqttPort, string mqttRootTopic, string hueBridgeAddress, string hueBridgeUsername)
         {
-            _mqttClient = new MqttClient(mqttHost);
-            _mqttClient.ConnectionClosed += (sender, args) =>
-            {
-                if (!_disconnectOnPurpose)
-                    _tmrReconnect.Start();
-            };
-            _mqttClient.MqttMsgPublishReceived += MqttClientOnMqttMsgPublishReceived;
-            _mqttRootTopic = mqttRootTopic;
-            _tmrReconnect.Elapsed += (sender, args) => Start();
+            _mqttRootTopic = !string.IsNullOrEmpty(mqttRootTopic) ? mqttRootTopic : "hue";
+            _mqttHost = mqttHost;
+            _mqttPort = mqttPort;
 
+            _mqttClient = new MqttFactory().CreateManagedMqttClient();
+            _mqttClient.ApplicationMessageReceived += MqttClientOnApplicationMessageReceived;
+            
             _hueClient = new LocalHueClient(hueBridgeAddress,
                 hueBridgeUsername);
 
@@ -54,16 +52,13 @@ namespace Net.Bluewalk.Hue2Mqtt
 
         public void InitializeMqttSubscriptions()
         {
-            _mqttSubscribedTopics = new List<string>();
-
             _hueLights?.ForEach(l =>
             {
                 var topic = $"{_mqttRootTopic}/light/{l.Id}/state/set";
 #if DEBUG
                 topic = $"dev/{topic}";
 #endif
-                _mqttClient.Subscribe(new[] { topic }, new[] { MqttMsgBase.QOS_LEVEL_EXACTLY_ONCE });
-                _mqttSubscribedTopics.Add(topic);
+                SubscribeTopic(topic);
             });
         }
 
@@ -86,10 +81,16 @@ namespace Net.Bluewalk.Hue2Mqtt
             _tmrPollHue.Start();
         }
 
-        public void Start()
+        public async void Start()
         {
-            _mqttClient.Connect($"BluewalkHue2Mqtt-{Environment.MachineName}");
-            _disconnectOnPurpose = false;
+            var options = new ManagedMqttClientOptionsBuilder()
+                .WithAutoReconnectDelay(TimeSpan.FromSeconds(5))
+                .WithClientOptions(new MqttClientOptionsBuilder()
+                    .WithClientId($"BluewalkHue2Mqtt-{Environment.MachineName}")
+                    .WithTcpServer(_mqttHost, _mqttPort))
+                .Build();
+
+            await _mqttClient.StartAsync(options);
             
             InitializeHue();
             InitializeMqttSubscriptions();
@@ -97,13 +98,22 @@ namespace Net.Bluewalk.Hue2Mqtt
             _tmrPollHue.Start();
         }
 
-        public void Stop()
+        public async void Stop()
         {
             _tmrPollHue.Stop();
             if (_mqttClient == null || !_mqttClient.IsConnected) return;
 
-            _disconnectOnPurpose = true;
-            _mqttClient.Disconnect();
+            await _mqttClient.StopAsync();
+        }
+
+        private async void SubscribeTopic(string topic)
+        {
+            topic = $"{_mqttRootTopic}/{topic}";
+
+#if DEBUG
+            topic = $"dev/{topic}";
+#endif
+            await _mqttClient.SubscribeAsync(new TopicFilterBuilder().WithTopic(topic).Build());
         }
 
         private void Publish(string topic, object message, bool retain = true)
@@ -111,14 +121,22 @@ namespace Net.Bluewalk.Hue2Mqtt
             Publish(topic, JsonConvert.SerializeObject(message), retain);
         }
 
-        private void Publish(string topic, string message, bool retain = true)
+        private async void Publish(string topic, string message, bool retain = true)
         {
             if (_mqttClient == null || !_mqttClient.IsConnected) return;
             topic = $"{_mqttRootTopic}/{topic}";
 #if DEBUG
             topic = $"dev/{topic}";
 #endif
-            _mqttClient.Publish(topic, Encoding.ASCII.GetBytes(message), MqttMsgBase.QOS_LEVEL_EXACTLY_ONCE, retain);
+
+            var msg = new MqttApplicationMessageBuilder()
+                .WithTopic(topic)
+                .WithPayload(message)
+                .WithExactlyOnceQoS()
+                .WithRetainFlag()
+                .Build();
+
+            await _mqttClient.PublishAsync(msg);
         }
 
         private bool CompareState(State state1, State state2)
@@ -135,10 +153,10 @@ namespace Net.Bluewalk.Hue2Mqtt
                    state1.TransitionTime == state2.TransitionTime;
         }
         
-        private void MqttClientOnMqttMsgPublishReceived(object sender, MqttMsgPublishEventArgs e)
+        private async void MqttClientOnApplicationMessageReceived(object sender, MqttApplicationMessageReceivedEventArgs e)
         {
-            var topic = e.Topic.ToUpper().Split('/');
-            var message = Encoding.ASCII.GetString(e.Message);
+            var topic = e.ApplicationMessage.Topic.ToUpper().Split('/');
+            var message = e.ApplicationMessage.ConvertPayloadToString();
 #if DEBUG
             // Remove first part "dev"
             topic = topic.Skip(1).ToArray();
@@ -160,13 +178,9 @@ namespace Net.Bluewalk.Hue2Mqtt
                             var state = JsonConvert.DeserializeObject<State>(message);
                             var command = new LightCommand();
                             command.FromState(state);
-                            _hueClient.SendCommandAsync(command, new List<string> { topic[2] });
-                            break;
-                        default:
+                            await _hueClient.SendCommandAsync(command, new List<string> { topic[2] });
                             break;
                     }
-                    break;
-                default:
                     break;
             }
         }
