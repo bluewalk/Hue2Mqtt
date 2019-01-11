@@ -11,6 +11,7 @@ Edit the `Net.Bluewalk.Hue2Mqtt.Service.exe.config` file and set the following s
 <configuration>
   <appSettings>
     <add key="MQTT_Host" value="127.0.0.1" />
+    <add key="MQTT_Port" value="1883" />
     <add key="MQTT_RootTopic" value="hue" />
     <add key="HueBridge_Address" value="x.x.x.x" />
     <add key="HueBridge_Username" value="myusername" />
@@ -20,6 +21,7 @@ Edit the `Net.Bluewalk.Hue2Mqtt.Service.exe.config` file and set the following s
 | Configuration setting | Description |
 |-|-|
 | MQTT_Host | IP address / DNS of the MQTT broker |
+| MQTT_Port | Port of the MQTT broker |
 | MQTT_RootTopic | This text will be prepended to the MQTT Topic `hue/#` |
 | HueBridge_Address | The IP / DNS of the Hue bridge |
 | HueBridge_Username | Username for the Hue bridge API, see below |
