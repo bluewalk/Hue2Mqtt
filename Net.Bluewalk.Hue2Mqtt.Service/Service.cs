@@ -71,8 +71,12 @@ namespace Net.Bluewalk.Hue2Mqtt.Service
 
         protected override void OnStart(string[] args)
         {
+            if (!int.TryParse(ConfigurationManager.AppSettings["MQTT_Port"], out var port))
+                port = 1833;
+
             _logic = new Hue2MqttLogic(
                 ConfigurationManager.AppSettings["MQTT_Host"],
+                port,
                 ConfigurationManager.AppSettings["MQTT_RootTopic"],
                 ConfigurationManager.AppSettings["HueBridge_Address"],
                 ConfigurationManager.AppSettings["HueBridge_Username"]
